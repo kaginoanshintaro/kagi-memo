@@ -829,6 +829,18 @@ function fmtDate(iso) {
   try { return new Date(iso).toLocaleString("ja-JP", { month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit" }); }
   catch(e) { return iso; }
 }
+function buildSegments(text, re) {
+  if (!text || !re) return [{ t: text, hit: false }];
+  const out = []; let last = 0; re.lastIndex = 0; let m;
+  while ((m = re.exec(text)) !== null) {
+    if (m.index > last) out.push({ t: text.slice(last, m.index), hit: false });
+    out.push({ t: m[0], hit: true });
+    last = m.index + m[0].length;
+    if (m.index === re.lastIndex) re.lastIndex++;
+  }
+  if (last < text.length) out.push({ t: text.slice(last), hit: false });
+  return out;
+}
 
 export default function App() {
   const [transcript, setTranscript] = useState("");
@@ -841,31 +853,30 @@ export default function App() {
   const [tab,        setTab]        = useState("memo");
   const [deletingId, setDeletingId] = useState(null);
   const [storageOk,  setStorageOk]  = useState(true);
+  const [editingId,  setEditingId]  = useState(null);
+  const [editText,   setEditText]   = useState("");
 
   const recRef = useRef(null);
   const taRef  = useRef(null);
 
-  // ストレージ読み込み
+  // ストレージ読み込み（端末のlocalStorageに保存）
   useEffect(() => {
-    (async () => {
-      try {
-        if (!window.storage) { setStorageOk(false); return; }
-        const m = await window.storage.get(STORE_MEMOS).catch(() => null);
-        if (m?.value) setMemos(JSON.parse(m.value));
-        const c = await window.storage.get(STORE_CUSTOM).catch(() => null);
-        if (c?.value) setCustomTerms(JSON.parse(c.value));
-      } catch(e) { setStorageOk(false); }
-    })();
+    try {
+      const m = localStorage.getItem(STORE_MEMOS);
+      if (m) setMemos(JSON.parse(m));
+      const c = localStorage.getItem(STORE_CUSTOM);
+      if (c) setCustomTerms(JSON.parse(c));
+    } catch(e) { setStorageOk(false); }
   }, []);
 
-  const saveMemos = async (next) => {
+  const saveMemos = (next) => {
     setMemos(next);
-    try { if (window.storage) await window.storage.set(STORE_MEMOS, JSON.stringify(next)); }
+    try { localStorage.setItem(STORE_MEMOS, JSON.stringify(next)); }
     catch(e) { setStorageOk(false); }
   };
-  const saveCustom = async (next) => {
+  const saveCustom = (next) => {
     setCustomTerms(next);
-    try { if (window.storage) await window.storage.set(STORE_CUSTOM, JSON.stringify(next)); }
+    try { localStorage.setItem(STORE_CUSTOM, JSON.stringify(next)); }
     catch(e) { setStorageOk(false); }
   };
 
@@ -880,18 +891,8 @@ export default function App() {
   }, [customTerms]);
 
   // 確認画面用セグメント
-  const segments = useMemo(() => {
-    if (!transcript || !highlightRe) return [{ t: transcript, hit: false }];
-    const out = []; let last = 0; highlightRe.lastIndex = 0; let m;
-    while ((m = highlightRe.exec(transcript)) !== null) {
-      if (m.index > last) out.push({ t: transcript.slice(last, m.index), hit: false });
-      out.push({ t: m[0], hit: true });
-      last = m.index + m[0].length;
-      if (m.index === highlightRe.lastIndex) highlightRe.lastIndex++;
-    }
-    if (last < transcript.length) out.push({ t: transcript.slice(last), hit: false });
-    return out;
-  }, [transcript, highlightRe]);
+  const segments     = useMemo(() => buildSegments(transcript, highlightRe), [transcript, highlightRe]);
+  const editSegments = useMemo(() => buildSegments(editText,   highlightRe), [editText,   highlightRe]);
 
   // 音声認識
   useEffect(() => {
@@ -927,6 +928,20 @@ export default function App() {
 
   const delMemo = (id) => { saveMemos(memos.filter(m => m.id !== id)); setDeletingId(null); };
   const copyText = async (text) => { try { await navigator.clipboard.writeText(text); } catch(e) {} };
+
+  const startEdit = (m) => { setEditText(m.text); setEditingId(m.id); setDeletingId(null); };
+  const saveEdit = () => {
+    const text = editText.trim(); if (!text) return;
+    saveMemos(memos.map(m => m.id === editingId ? { ...m, text, edited: new Date().toISOString() } : m));
+    setEditingId(null); setEditText("");
+  };
+  const sendToNotes = async (m) => {
+    const text = fmtDate(m.ts) + "\n\n" + m.text;
+    try {
+      if (navigator.share) { await navigator.share({ text }); }
+      else { await navigator.clipboard.writeText(text); alert("共有に未対応の端末のため、本文をコピーしました。メモアプリに貼り付けてください。"); }
+    } catch(e) { /* 共有をキャンセルした場合は何もしない */ }
+  };
 
   const S = {
     btn: (active, danger) => ({
@@ -968,6 +983,42 @@ export default function App() {
     );
   }
 
+  // ---- 編集画面 ----
+  if (editingId !== null) {
+    return (
+      <div style={{ background: C.bg, color: C.text, height: "100dvh", fontFamily: "'Hiragino Sans','Meiryo',sans-serif", display: "flex", flexDirection: "column" }}>
+        <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 10, padding: "14px 16px", borderBottom: "2px solid " + C.gold, background: C.surface }}>
+          <button onClick={() => { setEditingId(null); setEditText(""); }} style={{ background: "none", border: "none", color: C.gold, fontSize: 26, cursor: "pointer", padding: 0, lineHeight: 1 }}>‹</button>
+          <span style={{ fontSize: 15, fontWeight: 700, color: C.gold }}>記録を編集</span>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: 16, display: "flex", flexDirection: "column", minHeight: 0 }}>
+          <textarea
+            value={editText}
+            onChange={e => setEditText(e.target.value)}
+            style={{
+              minHeight: 160, width: "100%", boxSizing: "border-box",
+              background: C.surface, border: "1px solid " + C.gold,
+              borderRadius: 10, color: C.text, padding: "14px 14px",
+              fontSize: 15, lineHeight: 1.8, resize: "vertical", outline: "none",
+              fontFamily: "inherit", caretColor: C.gold, marginBottom: 12,
+            }}
+          />
+          <div style={{ fontSize: 12, color: C.textDim, marginBottom: 8 }}>辞書一致語をゴールドでハイライトしています</div>
+          <div style={{ background: C.surface, border: "1px solid " + C.border2, borderRadius: 10, padding: 14, fontSize: 15, lineHeight: 1.85 }}>
+            {editSegments.map((s, i) => s.hit
+              ? <span key={i} style={{ color: C.gold, background: C.goldSoft, borderRadius: 3, padding: "0 2px" }}>{s.t}</span>
+              : <span key={i}>{s.t}</span>
+            )}
+          </div>
+        </div>
+        <div style={{ flexShrink: 0, padding: "12px 16px", paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))", display: "flex", gap: 10, background: C.surface, borderTop: "1px solid " + C.border }}>
+          <button onClick={() => { setEditingId(null); setEditText(""); }} style={{ ...S.btn(false), flex: 1 }}>キャンセル</button>
+          <button onClick={saveEdit} disabled={!editText.trim()} style={{ ...S.btn(!!editText.trim()), flex: 2 }}>保存</button>
+        </div>
+      </div>
+    );
+  }
+
   // ---- 履歴画面 ----
   if (tab === "history") {
     return (
@@ -982,19 +1033,22 @@ export default function App() {
             : memos.map(m => (
               <div key={m.id} style={{ background: C.surface, border: "1px solid " + C.border, borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                  <span style={{ fontSize: 12, color: C.gold }}>{fmtDate(m.ts)}</span>
-                  <span style={{ display: "flex", gap: 14 }}>
-                    <span onClick={() => copyText(m.text)} style={{ fontSize: 12, color: C.textMute, cursor: "pointer" }}>コピー</span>
-                    {deletingId === m.id
-                      ? <span style={{ display: "flex", gap: 10 }}>
-                          <span onClick={() => delMemo(m.id)} style={{ fontSize: 12, color: C.danger, cursor: "pointer" }}>削除確定</span>
-                          <span onClick={() => setDeletingId(null)} style={{ fontSize: 12, color: C.textDim, cursor: "pointer" }}>取消</span>
-                        </span>
-                      : <span onClick={() => setDeletingId(m.id)} style={{ fontSize: 12, color: C.textDim, cursor: "pointer" }}>削除</span>
-                    }
+                  <span style={{ fontSize: 12, color: C.gold }}>
+                    {fmtDate(m.ts)}{m.edited ? <span style={{ color: C.textDim, marginLeft: 6 }}>（編集済）</span> : null}
                   </span>
                 </div>
-                <div style={{ fontSize: 13, color: C.text, lineHeight: 1.75, whiteSpace: "pre-wrap" }}>{m.text}</div>
+                <div style={{ fontSize: 13, color: C.text, lineHeight: 1.75, whiteSpace: "pre-wrap", marginBottom: 10 }}>{m.text}</div>
+                <div style={{ display: "flex", gap: 8, borderTop: "1px solid " + C.border, paddingTop: 9 }}>
+                  <button onClick={() => startEdit(m)} style={{ ...S.btn(false), flex: 1, padding: "8px 0", fontSize: 12 }}>編集</button>
+                  <button onClick={() => sendToNotes(m)} style={{ ...S.btn(true), flex: 1, padding: "8px 0", fontSize: 12 }}>送信</button>
+                  <button onClick={() => copyText(m.text)} style={{ ...S.btn(false), flex: 1, padding: "8px 0", fontSize: 12 }}>コピー</button>
+                  {deletingId === m.id
+                    ? <button onClick={() => delMemo(m.id)} style={{ ...S.btn(true, true), flex: 1, padding: "8px 0", fontSize: 12 }}>確定</button>
+                    : <button onClick={() => setDeletingId(m.id)} style={{ ...S.btn(false, true), flex: 1, padding: "8px 0", fontSize: 12 }}>削除</button>}
+                </div>
+                {deletingId === m.id && (
+                  <div onClick={() => setDeletingId(null)} style={{ fontSize: 11, color: C.textDim, cursor: "pointer", textAlign: "right", marginTop: 6 }}>削除をやめる</div>
+                )}
               </div>
             ))
           }
