@@ -825,6 +825,11 @@ const C = {
 
 const STORE_MEMOS   = "memos:v3";
 const STORE_CUSTOM  = "customTerms:v2";
+const STORE_REPLACE = "replaceRules:v1";
+const DEFAULT_REPLACE = [
+  { from: "会場", to: "開錠" },
+  { from: "解錠", to: "開錠" },
+];
 
 function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 function fmtDate(iso) {
@@ -860,6 +865,10 @@ export default function App() {
   const [termInput,  setTermInput]  = useState("");
   const [termCat,    setTermCat]    = useState("取引先");
   const [termPanelOpen, setTermPanelOpen] = useState(false);
+  const [replaceRules, setReplaceRules] = useState(DEFAULT_REPLACE);
+  const [replaceFrom,  setReplaceFrom]  = useState("");
+  const [replaceTo,    setReplaceTo]    = useState("");
+  const [replacePanelOpen, setReplacePanelOpen] = useState(false);
 
   const recRef = useRef(null);
   const taRef  = useRef(null);
@@ -871,6 +880,8 @@ export default function App() {
       if (m) setMemos(JSON.parse(m));
       const c = localStorage.getItem(STORE_CUSTOM);
       if (c) setCustomTerms(JSON.parse(c));
+      const r = localStorage.getItem(STORE_REPLACE);
+      if (r) setReplaceRules(JSON.parse(r));
     } catch(e) { setStorageOk(false); }
   }, []);
 
@@ -882,6 +893,11 @@ export default function App() {
   const saveCustom = (next) => {
     setCustomTerms(next);
     try { localStorage.setItem(STORE_CUSTOM, JSON.stringify(next)); }
+    catch(e) { setStorageOk(false); }
+  };
+  const saveReplace = (next) => {
+    setReplaceRules(next);
+    try { localStorage.setItem(STORE_REPLACE, JSON.stringify(next)); }
     catch(e) { setStorageOk(false); }
   };
 
@@ -954,6 +970,19 @@ export default function App() {
     setTermInput(""); setTermPanelOpen(false);
   };
   const delCustomTerm = (word) => { saveCustom(customTerms.filter(item => (typeof item === "string" ? item : item.word) !== word)); };
+  const applyReplace = () => {
+    let t = transcript;
+    replaceRules.forEach(({ from, to }) => { t = t.split(from).join(to); });
+    setTranscript(t);
+  };
+  const addRule = () => {
+    const f = replaceFrom.trim(), t = replaceTo.trim();
+    if (!f || !t) return;
+    if (replaceRules.some(r => r.from === f)) { setReplaceFrom(""); setReplaceTo(""); return; }
+    saveReplace([...replaceRules, { from: f, to: t }]);
+    setReplaceFrom(""); setReplaceTo("");
+  };
+  const delRule = (from) => saveReplace(replaceRules.filter(r => r.from !== from));
 
   const S = {
     btn: (active, danger) => ({
@@ -987,9 +1016,32 @@ export default function App() {
           </div>
           <div style={{ fontSize: 12, color: C.textDim }}>修正する場合は「戻る」で編集できます</div>
         </div>
-        <div style={{ flexShrink: 0, padding: "12px 16px", paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))", display: "flex", gap: 10, background: C.surface, borderTop: "1px solid " + C.border }}>
-          <button onClick={() => setConfirming(false)} style={{ ...S.btn(false), flex: 1 }}>戻る</button>
-          <button onClick={doSave} style={{ ...S.btn(true), flex: 2 }}>この内容で保存</button>
+        <div style={{ flexShrink: 0, background: C.surface, borderTop: "1px solid " + C.border }}>
+          {replacePanelOpen && (
+            <div style={{ padding: "10px 16px", borderBottom: "1px solid " + C.border }}>
+              <div style={{ fontSize: 12, color: C.gold, fontWeight: 700, marginBottom: 8 }}>誤変換ルール管理</div>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 6, marginBottom: 8 }}>
+                {replaceRules.map((r, i) => (
+                  <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: C.goldSoft, border: "1px solid " + C.gold, borderRadius: 12, padding: "3px 8px", fontSize: 11, color: C.gold }}>
+                    {r.from}→{r.to}
+                    <span onClick={() => delRule(r.from)} style={{ cursor: "pointer", color: C.textDim, fontSize: 12 }}>✕</span>
+                  </span>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 6 }}>
+                <input value={replaceFrom} onChange={e => setReplaceFrom(e.target.value)} placeholder="誤変換" style={{ flex: 1, background: C.bg, border: "1px solid " + C.border2, borderRadius: 6, color: C.text, padding: "6px 8px", fontSize: 12, outline: "none", fontFamily: "inherit" }} />
+                <span style={{ color: C.textDim, alignSelf: "center" }}>→</span>
+                <input value={replaceTo} onChange={e => setReplaceTo(e.target.value)} placeholder="正しい表記" style={{ flex: 1, background: C.bg, border: "1px solid " + C.border2, borderRadius: 6, color: C.text, padding: "6px 8px", fontSize: 12, outline: "none", fontFamily: "inherit" }} />
+                <button onClick={addRule} disabled={!replaceFrom.trim() || !replaceTo.trim()} style={{ padding: "6px 10px", borderRadius: 6, border: "none", background: (replaceFrom.trim() && replaceTo.trim()) ? C.gold : C.border2, color: (replaceFrom.trim() && replaceTo.trim()) ? "#0f1117" : C.textDim, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>追加</button>
+              </div>
+            </div>
+          )}
+          <div style={{ padding: "12px 16px", paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))", display: "flex", gap: 8 }}>
+            <button onClick={() => setConfirming(false)} style={{ ...S.btn(false), flex: 1 }}>戻る</button>
+            <button onClick={() => { applyReplace(); setReplacePanelOpen(false); }} style={{ ...S.btn(false), flex: 1.2, fontSize: 12 }}>誤変換を修正</button>
+            <button onClick={() => setReplacePanelOpen(v => !v)} style={{ ...S.btn(replacePanelOpen), padding: "11px 10px", borderRadius: 8, cursor: "pointer", fontSize: 18, background: "transparent", border: "1px solid " + C.border2, color: C.textMute }}>⚙️</button>
+            <button onClick={doSave} style={{ ...S.btn(true), flex: 2 }}>保存</button>
+          </div>
         </div>
       </div>
     );
