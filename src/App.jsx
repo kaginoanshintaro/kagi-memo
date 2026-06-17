@@ -804,7 +804,9 @@ const TERMS = {
     "的ケ浜",
     "弓ケ浜町",
     "南的ケ浜町"
-  ]
+  ],
+  "取引先": [],
+  "物件名": []
 };
 
 const C = {
@@ -822,7 +824,7 @@ const C = {
 };
 
 const STORE_MEMOS   = "memos:v3";
-const STORE_CUSTOM  = "customTerms:v1";
+const STORE_CUSTOM  = "customTerms:v2";
 
 function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
 function fmtDate(iso) {
@@ -855,6 +857,9 @@ export default function App() {
   const [storageOk,  setStorageOk]  = useState(true);
   const [editingId,  setEditingId]  = useState(null);
   const [editText,   setEditText]   = useState("");
+  const [termInput,  setTermInput]  = useState("");
+  const [termCat,    setTermCat]    = useState("取引先");
+  const [termPanelOpen, setTermPanelOpen] = useState(false);
 
   const recRef = useRef(null);
   const taRef  = useRef(null);
@@ -884,7 +889,7 @@ export default function App() {
   const highlightRe = useMemo(() => {
     const all = new Set();
     Object.values(TERMS).forEach(arr => arr.forEach(t => all.add(t)));
-    customTerms.forEach(t => all.add(t));
+    customTerms.forEach(item => { const w = typeof item === "string" ? item : item.word; if (w) all.add(w); });
     const sorted = [...all].sort((a,b) => b.length - a.length).map(escapeRe);
     try { return sorted.length ? new RegExp("(" + sorted.join("|") + ")", "g") : null; }
     catch(e) { return null; }
@@ -942,6 +947,13 @@ export default function App() {
       else { await navigator.clipboard.writeText(text); alert("共有に未対応の端末のため、本文をコピーしました。メモアプリに貼り付けてください。"); }
     } catch(e) { /* 共有をキャンセルした場合は何もしない */ }
   };
+  const addTerm = () => {
+    const word = termInput.trim(); if (!word) return;
+    if (customTerms.some(item => (typeof item === "string" ? item : item.word) === word)) { setTermInput(""); return; }
+    saveCustom([...customTerms, { word, cat: termCat }]);
+    setTermInput(""); setTermPanelOpen(false);
+  };
+  const delCustomTerm = (word) => { saveCustom(customTerms.filter(item => (typeof item === "string" ? item : item.word) !== word)); };
 
   const S = {
     btn: (active, danger) => ({
@@ -1084,8 +1096,9 @@ export default function App() {
           onChange={e => setTranscript(e.target.value)}
           placeholder={listening ? "話してください…" : "マイクで話すか、直接入力してください\n\n現場が終わったら声でメモを残してください"}
           style={{
-            flex: 1,
             width: "100%", boxSizing: "border-box",
+            flex: 1,
+            minHeight: 120,
             background: C.surface,
             border: "1px solid " + (listening ? C.gold : C.border2),
             borderRadius: 10, color: C.text,
@@ -1123,6 +1136,50 @@ export default function App() {
             </button>
           </div>
         </div>
+      </div>
+
+      {/* 用語追加パネル */}
+      <div style={{ flexShrink: 0, padding: "0 14px 8px" }}>
+        {!termPanelOpen
+          ? <button onClick={() => setTermPanelOpen(true)} style={{ width: "100%", padding: "9px 0", background: "transparent", border: "1px dashed " + C.border2, borderRadius: 8, color: C.textMute, fontSize: 12, cursor: "pointer" }}>＋ 専門用語を追加</button>
+          : <div style={{ background: C.surface, border: "1px solid " + C.border2, borderRadius: 10, padding: "12px 12px 10px" }}>
+              <div style={{ fontSize: 12, color: C.gold, marginBottom: 8, fontWeight: 700 }}>専門用語の追加登録</div>
+              <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+                {["取引先","物件名","その他"].map(cat => (
+                  <button key={cat} onClick={() => setTermCat(cat)}
+                    style={{ flex: 1, padding: "6px 0", borderRadius: 6, border: "1px solid " + (termCat === cat ? C.gold : C.border2),
+                      background: termCat === cat ? C.goldSoft : "transparent",
+                      color: termCat === cat ? C.gold : C.textMute, fontSize: 11, cursor: "pointer" }}>
+                    {cat}
+                  </button>
+                ))}
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input value={termInput} onChange={e => setTermInput(e.target.value)}
+                  onKeyDown={e => e.key === "Enter" && addTerm()}
+                  placeholder="用語を入力"
+                  style={{ flex: 1, background: C.bg, border: "1px solid " + C.border2, borderRadius: 8, color: C.text, padding: "8px 10px", fontSize: 13, outline: "none", fontFamily: "inherit", caretColor: C.gold }} />
+                <button onClick={addTerm} disabled={!termInput.trim()}
+                  style={{ padding: "8px 14px", borderRadius: 8, border: "none", background: termInput.trim() ? C.gold : C.border2, color: termInput.trim() ? "#0f1117" : C.textDim, fontWeight: 700, fontSize: 13, cursor: termInput.trim() ? "pointer" : "default" }}>追加</button>
+                <button onClick={() => { setTermPanelOpen(false); setTermInput(""); }}
+                  style={{ padding: "8px 10px", borderRadius: 8, border: "1px solid " + C.border2, background: "transparent", color: C.textMute, fontSize: 12, cursor: "pointer" }}>✕</button>
+              </div>
+              {customTerms.length > 0 && (
+                <div style={{ marginTop: 10, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                  {customTerms.map((item, i) => {
+                    const word = typeof item === "string" ? item : item.word;
+                    const cat  = typeof item === "string" ? "その他" : item.cat;
+                    return (
+                      <span key={i} style={{ display: "inline-flex", alignItems: "center", gap: 4, background: C.goldSoft, border: "1px solid " + C.gold, borderRadius: 12, padding: "3px 8px", fontSize: 11, color: C.gold }}>
+                        <span style={{ color: C.textDim, fontSize: 10 }}>{cat}:</span>{word}
+                        <span onClick={() => delCustomTerm(word)} style={{ cursor: "pointer", color: C.textDim, fontSize: 12, lineHeight: 1 }}>✕</span>
+                      </span>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+        }
       </div>
 
       <BottomTab tab={tab} setTab={setTab} C={C} />
