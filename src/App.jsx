@@ -1144,16 +1144,12 @@ export default function App() {
           ? <button onClick={() => setTermPanelOpen(true)} style={{ width: "100%", padding: "9px 0", background: "transparent", border: "1px dashed " + C.border2, borderRadius: 8, color: C.textMute, fontSize: 12, cursor: "pointer" }}>＋ 専門用語を追加</button>
           : <div style={{ background: C.surface, border: "1px solid " + C.border2, borderRadius: 10, padding: "12px 12px 10px" }}>
               <div style={{ fontSize: 12, color: C.gold, marginBottom: 8, fontWeight: 700 }}>専門用語の追加登録</div>
-              <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
-                {["取引先","物件名","その他"].map(cat => (
-                  <button key={cat} onClick={() => setTermCat(cat)}
-                    style={{ flex: 1, padding: "6px 0", borderRadius: 6, border: "1px solid " + (termCat === cat ? C.gold : C.border2),
-                      background: termCat === cat ? C.goldSoft : "transparent",
-                      color: termCat === cat ? C.gold : C.textMute, fontSize: 11, cursor: "pointer" }}>
-                    {cat}
-                  </button>
-                ))}
-              </div>
+              <select value={termCat} onChange={e => setTermCat(e.target.value)}
+                style={{ width: "100%", marginBottom: 8, padding: "8px 10px", borderRadius: 8,
+                  border: "1px solid " + C.border2, background: C.bg, color: C.text,
+                  fontSize: 13, outline: "none", fontFamily: "inherit" }}>
+                {Object.keys(TERMS).map(cat => <option key={cat} value={cat}>{cat}</option>)}
+              </select>
               <div style={{ display: "flex", gap: 8 }}>
                 <input value={termInput} onChange={e => setTermInput(e.target.value)}
                   onKeyDown={e => e.key === "Enter" && addTerm()}
