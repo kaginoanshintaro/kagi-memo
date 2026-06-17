@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useMemo, useCallback } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 
 const TERMS = {
   "チップ・トランスポンダー": [
@@ -807,9 +807,6 @@ const TERMS = {
   ]
 };
 
-const CATEGORIES = Object.keys(TERMS);
-
-// テーマ（真鍮キー）
 const C = {
   bg: "#0f1117",
   surface: "#1a1d27",
@@ -824,116 +821,67 @@ const C = {
   danger: "#c0392b",
 };
 
-const STORE_MEMOS = "memos:v1";
-const STORE_CUSTOM = "customTerms:v1";
+const STORE_MEMOS   = "memos:v3";
+const STORE_CUSTOM  = "customTerms:v1";
 
 function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"); }
+function fmtDate(iso) {
+  try { return new Date(iso).toLocaleString("ja-JP", { month:"numeric", day:"numeric", hour:"2-digit", minute:"2-digit" }); }
+  catch(e) { return iso; }
+}
 
-export default function KagiFieldMemo() {
+export default function App() {
   const [transcript, setTranscript] = useState("");
-  const [interim, setInterim] = useState("");
-  const [listening, setListening] = useState(false);
-  const [status, setStatus] = useState("待機中");
-  const [activeCat, setActiveCat] = useState(CATEGORIES[0]);
-  const [search, setSearch] = useState("");
-  const [customTerms, setCustomTerms] = useState([]);
-  const [memos, setMemos] = useState([]);
+  const [interim,    setInterim]    = useState("");
+  const [listening,  setListening]  = useState(false);
+  const [status,     setStatus]     = useState("待機中");
+  const [customTerms,setCustomTerms]= useState([]);
+  const [memos,      setMemos]      = useState([]);
   const [confirming, setConfirming] = useState(false);
-  const [showAdd, setShowAdd] = useState(false);
-  const [newTerm, setNewTerm] = useState("");
-  const [newCat, setNewCat] = useState(CATEGORIES[0]);
-  const [copied, setCopied] = useState(false);
+  const [tab,        setTab]        = useState("memo");
   const [deletingId, setDeletingId] = useState(null);
-  const [storageOk, setStorageOk] = useState(true);
+  const [storageOk,  setStorageOk]  = useState(true);
 
   const recRef = useRef(null);
-  const taRef = useRef(null);
-  const backdropRef = useRef(null);
-  const caretRef = useRef(null);
+  const taRef  = useRef(null);
 
-  // ---- 永続化（端末に保存） ----
+  // ストレージ読み込み
   useEffect(() => {
     (async () => {
       try {
         if (!window.storage) { setStorageOk(false); return; }
         const m = await window.storage.get(STORE_MEMOS).catch(() => null);
-        if (m && m.value) setMemos(JSON.parse(m.value));
+        if (m?.value) setMemos(JSON.parse(m.value));
         const c = await window.storage.get(STORE_CUSTOM).catch(() => null);
-        if (c && c.value) setCustomTerms(JSON.parse(c.value));
-      } catch (e) { setStorageOk(false); }
+        if (c?.value) setCustomTerms(JSON.parse(c.value));
+      } catch(e) { setStorageOk(false); }
     })();
   }, []);
 
-  const saveMemos = useCallback(async (next) => {
+  const saveMemos = async (next) => {
     setMemos(next);
     try { if (window.storage) await window.storage.set(STORE_MEMOS, JSON.stringify(next)); }
-    catch (e) { setStorageOk(false); }
-  }, []);
-
-  const saveCustom = useCallback(async (next) => {
+    catch(e) { setStorageOk(false); }
+  };
+  const saveCustom = async (next) => {
     setCustomTerms(next);
     try { if (window.storage) await window.storage.set(STORE_CUSTOM, JSON.stringify(next)); }
-    catch (e) { setStorageOk(false); }
-  }, []);
+    catch(e) { setStorageOk(false); }
+  };
 
-  // ---- 全用語（辞書 + 追加）----
-  const allTerms = useMemo(() => {
-    const set = new Set();
-    Object.values(TERMS).forEach(arr => arr.forEach(t => set.add(t)));
-    customTerms.forEach(t => set.add(t));
-    return Array.from(set);
+  // 全用語（ハイライト用）
+  const highlightRe = useMemo(() => {
+    const all = new Set();
+    Object.values(TERMS).forEach(arr => arr.forEach(t => all.add(t)));
+    customTerms.forEach(t => all.add(t));
+    const sorted = [...all].sort((a,b) => b.length - a.length).map(escapeRe);
+    try { return sorted.length ? new RegExp("(" + sorted.join("|") + ")", "g") : null; }
+    catch(e) { return null; }
   }, [customTerms]);
 
-  const highlightRe = useMemo(() => {
-    if (allTerms.length === 0) return null;
-    const sorted = [...allTerms].sort((a, b) => b.length - a.length).map(escapeRe);
-    try { return new RegExp("(" + sorted.join("|") + ")", "g"); }
-    catch (e) { return null; }
-  }, [allTerms]);
-
-  // ---- 音声認識 ----
-  useEffect(() => {
-    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { setStatus("⚠️ 音声認識非対応のブラウザ"); return; }
-    const r = new SR();
-    r.lang = "ja-JP"; r.continuous = true; r.interimResults = true;
-    r.onresult = (e) => {
-      let fin = "", itm = "";
-      for (let i = e.resultIndex; i < e.results.length; i++) {
-        const t = e.results[i][0].transcript;
-        if (e.results[i].isFinal) fin += t; else itm += t;
-      }
-      if (fin) setTranscript(prev => prev + fin);
-      setInterim(itm);
-    };
-    r.onstart = () => { setListening(true); setStatus("録音中"); };
-    r.onend = () => { setListening(false); setInterim(""); setStatus("待機中"); };
-    r.onerror = (e) => { setListening(false); setStatus("エラー: " + e.error); };
-    recRef.current = r;
-  }, []);
-
-  const toggleMic = () => {
-    const r = recRef.current; if (!r) return;
-    if (listening) r.stop(); else { try { r.start(); } catch (e) {} }
-  };
-
-  // ---- カーソル位置に用語挿入 ----
-  const insertTerm = (term) => {
-    const ta = taRef.current;
-    const pos = caretRef.current != null ? caretRef.current : transcript.length;
-    const next = transcript.slice(0, pos) + term + transcript.slice(pos);
-    setTranscript(next);
-    caretRef.current = pos + term.length;
-    setTimeout(() => { if (ta) { ta.focus(); ta.selectionStart = ta.selectionEnd = pos + term.length; } }, 0);
-  };
-
-  const onTaSelect = () => { const ta = taRef.current; if (ta) caretRef.current = ta.selectionStart; };
-  const onTaScroll = () => { if (backdropRef.current && taRef.current) backdropRef.current.scrollTop = taRef.current.scrollTop; };
-
-  // ---- ハイライト描画用セグメント ----
+  // 確認画面用セグメント
   const segments = useMemo(() => {
-    if (!transcript) return [];
-    if (!highlightRe) return [{ t: transcript, hit: false }];
+    if (!transcript || !highlightRe) return [{ t: transcript, hit: false }];
     const out = []; let last = 0; highlightRe.lastIndex = 0; let m;
     while ((m = highlightRe.exec(transcript)) !== null) {
       if (m.index > last) out.push({ t: transcript.slice(last, m.index), hit: false });
@@ -945,224 +893,199 @@ export default function KagiFieldMemo() {
     return out;
   }, [transcript, highlightRe]);
 
-  const matchedList = useMemo(() => {
-    const s = new Set(segments.filter(x => x.hit).map(x => x.t));
-    return Array.from(s);
-  }, [segments]);
+  // 音声認識
+  useEffect(() => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { setStatus("⚠️ 音声非対応"); return; }
+    const r = new SR();
+    r.lang = "ja-JP"; r.continuous = true; r.interimResults = true;
+    r.onresult = (e) => {
+      let fin = "", itm = "";
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const t = e.results[i][0].transcript;
+        if (e.results[i].isFinal) fin += t; else itm += t;
+      }
+      if (fin) setTranscript(prev => prev + fin);
+      setInterim(itm);
+    };
+    r.onstart = () => { setListening(true);  setStatus("録音中"); };
+    r.onend   = () => { setListening(false); setInterim(""); setStatus("待機中"); };
+    r.onerror = (e) => { setListening(false); setStatus("エラー: " + e.error); };
+    recRef.current = r;
+  }, []);
 
-  // ---- 用語リスト（カテゴリ/検索）----
-  const customCat = "追加用語";
-  const catList = [...CATEGORIES, ...(customTerms.length ? [customCat] : [])];
-  const shownTerms = useMemo(() => {
-    if (search.trim()) {
-      const q = search.trim();
-      const hits = [];
-      Object.entries(TERMS).forEach(([c, arr]) => arr.forEach(t => { if (t.includes(q)) hits.push({ t, c }); }));
-      customTerms.forEach(t => { if (t.includes(q)) hits.push({ t, c: customCat }); });
-      return hits.slice(0, 60);
-    }
-    if (activeCat === customCat) return customTerms.map(t => ({ t, c: customCat }));
-    return (TERMS[activeCat] || []).map(t => ({ t, c: activeCat }));
-  }, [search, activeCat, customTerms]);
-
-  // ---- 追加 / 保存 ----
-  const addTerm = () => {
-    const t = newTerm.trim(); if (!t) return;
-    if (!customTerms.includes(t) && !allTerms.includes(t)) saveCustom([...customTerms, t]);
-    setNewTerm(""); setShowAdd(false);
+  const toggleMic = () => {
+    const r = recRef.current; if (!r) return;
+    if (listening) r.stop(); else { try { r.start(); } catch(e) {} }
   };
 
   const doSave = () => {
     const text = transcript.trim(); if (!text) return;
-    const rec = { id: Date.now(), ts: new Date().toISOString(), text };
-    saveMemos([rec, ...memos]);
-    setTranscript(""); setInterim(""); caretRef.current = null; setConfirming(false);
+    saveMemos([{ id: Date.now(), ts: new Date().toISOString(), text }, ...memos]);
+    setTranscript(""); setInterim(""); setConfirming(false);
   };
 
   const delMemo = (id) => { saveMemos(memos.filter(m => m.id !== id)); setDeletingId(null); };
+  const copyText = async (text) => { try { await navigator.clipboard.writeText(text); } catch(e) {} };
 
-  const copyText = (text) => {
-    try { navigator.clipboard.writeText(text); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch (e) {}
+  const S = {
+    btn: (active, danger) => ({
+      padding: "11px 0", borderRadius: 8, cursor: "pointer", fontSize: 13,
+      background: danger ? (active ? C.danger : "transparent")
+                         : (active ? C.gold   : "transparent"),
+      color: danger ? (active ? "#fff" : C.danger)
+                    : (active ? "#0f1117" : C.textMute),
+      border: "1px solid " + (danger ? C.danger : (active ? C.gold : C.border2)),
+      fontWeight: active ? 700 : 400,
+    }),
   };
 
-  const fmt = (iso) => {
-    try { const d = new Date(iso); return d.toLocaleString("ja-JP", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" }); }
-    catch (e) { return iso; }
-  };
+  // ---- 確認画面 ----
+  if (confirming) {
+    return (
+      <div style={{ background: C.bg, color: C.text, height: "100dvh", fontFamily: "'Hiragino Sans','Meiryo',sans-serif", display: "flex", flexDirection: "column" }}>
+        <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 10, padding: "14px 16px", borderBottom: "2px solid " + C.gold, background: C.surface }}>
+          <button onClick={() => setConfirming(false)} style={{ background: "none", border: "none", color: C.gold, fontSize: 26, cursor: "pointer", padding: 0, lineHeight: 1 }}>‹</button>
+          <span style={{ fontSize: 15, fontWeight: 700, color: C.gold }}>保存前の確認</span>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: 16 }}>
+          <div style={{ fontSize: 12, color: C.textDim, marginBottom: 8 }}>
+            辞書一致語をゴールドでハイライトしています
+          </div>
+          <div style={{ background: C.surface, border: "1px solid " + C.border2, borderRadius: 10, padding: 14, fontSize: 15, lineHeight: 1.85, marginBottom: 12 }}>
+            {segments.map((s, i) => s.hit
+              ? <span key={i} style={{ color: C.gold, background: C.goldSoft, borderRadius: 3, padding: "0 2px" }}>{s.t}</span>
+              : <span key={i}>{s.t}</span>
+            )}
+          </div>
+          <div style={{ fontSize: 12, color: C.textDim }}>修正する場合は「戻る」で編集できます</div>
+        </div>
+        <div style={{ flexShrink: 0, padding: "12px 16px", paddingBottom: "calc(12px + env(safe-area-inset-bottom, 0px))", display: "flex", gap: 10, background: C.surface, borderTop: "1px solid " + C.border }}>
+          <button onClick={() => setConfirming(false)} style={{ ...S.btn(false), flex: 1 }}>戻る</button>
+          <button onClick={doSave} style={{ ...S.btn(true), flex: 2 }}>この内容で保存</button>
+        </div>
+      </div>
+    );
+  }
 
-  const taShared = {
-    fontSize: 14, lineHeight: "1.7", fontFamily: "inherit",
-    padding: "11px 12px", boxSizing: "border-box",
-    whiteSpace: "pre-wrap", wordBreak: "break-word",
-    width: "100%", minHeight: 120, border: "1px solid " + C.border2,
-    borderRadius: 8, margin: 0,
-  };
+  // ---- 履歴画面 ----
+  if (tab === "history") {
+    return (
+      <div style={{ background: C.bg, color: C.text, height: "100dvh", fontFamily: "'Hiragino Sans','Meiryo',sans-serif", display: "flex", flexDirection: "column" }}>
+        <div style={{ flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between", padding: "14px 16px", borderBottom: "2px solid " + C.gold, background: C.surface }}>
+          <span style={{ fontSize: 15, fontWeight: 700, color: C.gold }}>保存済みの記録</span>
+          <span style={{ fontSize: 12, color: C.textMute }}>{memos.length}件</span>
+        </div>
+        <div style={{ flex: 1, overflowY: "auto", padding: 14 }}>
+          {memos.length === 0
+            ? <div style={{ color: C.textDim, fontSize: 13, marginTop: 30, textAlign: "center" }}>まだ記録はありません</div>
+            : memos.map(m => (
+              <div key={m.id} style={{ background: C.surface, border: "1px solid " + C.border, borderRadius: 10, padding: "12px 14px", marginBottom: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <span style={{ fontSize: 12, color: C.gold }}>{fmtDate(m.ts)}</span>
+                  <span style={{ display: "flex", gap: 14 }}>
+                    <span onClick={() => copyText(m.text)} style={{ fontSize: 12, color: C.textMute, cursor: "pointer" }}>コピー</span>
+                    {deletingId === m.id
+                      ? <span style={{ display: "flex", gap: 10 }}>
+                          <span onClick={() => delMemo(m.id)} style={{ fontSize: 12, color: C.danger, cursor: "pointer" }}>削除確定</span>
+                          <span onClick={() => setDeletingId(null)} style={{ fontSize: 12, color: C.textDim, cursor: "pointer" }}>取消</span>
+                        </span>
+                      : <span onClick={() => setDeletingId(m.id)} style={{ fontSize: 12, color: C.textDim, cursor: "pointer" }}>削除</span>
+                    }
+                  </span>
+                </div>
+                <div style={{ fontSize: 13, color: C.text, lineHeight: 1.75, whiteSpace: "pre-wrap" }}>{m.text}</div>
+              </div>
+            ))
+          }
+        </div>
+        <BottomTab tab={tab} setTab={setTab} C={C} />
+      </div>
+    );
+  }
 
+  // ---- メイン画面 ----
   return (
-    <div style={{ background: C.bg, color: C.text, minHeight: "100vh", fontFamily: "'Hiragino Sans','Meiryo',sans-serif", maxWidth: 480, margin: "0 auto" }}>
+    <div style={{ background: C.bg, color: C.text, height: "100dvh", fontFamily: "'Hiragino Sans','Meiryo',sans-serif", display: "flex", flexDirection: "column", maxWidth: 480, margin: "0 auto" }}>
 
-      {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", gap: 9, padding: "12px 14px", borderBottom: "2px solid " + C.gold, background: C.surface, position: "sticky", top: 0, zIndex: 5 }}>
-        <span style={{ width: 30, height: 30, borderRadius: "50%", background: C.gold, display: "flex", alignItems: "center", justifyContent: "center", color: "#0f1117", fontSize: 17 }}>🔑</span>
-        <div style={{ flex: 1, minWidth: 0 }}>
+      {/* ヘッダー */}
+      <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 9, padding: "12px 14px", borderBottom: "2px solid " + C.gold, background: C.surface }}>
+        <span style={{ fontSize: 20 }}>🔑</span>
+        <div style={{ flex: 1 }}>
           <div style={{ fontSize: 14, fontWeight: 700, color: C.gold }}>カギの安心太郎 現場メモ</div>
-          <div style={{ fontSize: 11, color: C.textDim }}>音声で記録 → 端末に保存</div>
         </div>
         <span style={{ fontSize: 11, color: C.textMute, display: "flex", alignItems: "center", gap: 5 }}>
-          <span style={{ width: 8, height: 8, borderRadius: "50%", background: listening ? C.danger : C.textDim, boxShadow: listening ? "0 0 6px " + C.danger : "none" }} />
+          <span style={{ width: 8, height: 8, borderRadius: "50%", flexShrink: 0,
+            background: listening ? C.danger : C.textDim,
+            boxShadow: listening ? "0 0 6px " + C.danger : "none" }} />
           {status}
         </span>
       </div>
 
-      <div style={{ padding: 14 }}>
-
-        {/* 音声メモ（ハイライト付き）*/}
-        <div style={{ fontSize: 11, color: C.textDim, marginBottom: 6 }}>音声メモ</div>
-        <div style={{ position: "relative" }}>
-          <div ref={backdropRef} aria-hidden="true" style={{ ...taShared, position: "absolute", inset: 0, borderColor: "transparent", color: C.text, overflow: "hidden", pointerEvents: "none" }}>
-            {segments.length === 0
-              ? <span style={{ color: C.textDim }}>マイクで話すか、下の用語をタップして入力…</span>
-              : segments.map((s, i) => s.hit
-                  ? <span key={i} style={{ color: C.gold, background: C.goldSoft, borderRadius: 3, padding: "0 1px" }}>{s.t}</span>
-                  : <span key={i}>{s.t}</span>)}
-          </div>
-          <textarea
-            ref={taRef}
-            value={transcript}
-            onChange={(e) => { setTranscript(e.target.value); caretRef.current = e.target.selectionStart; }}
-            onSelect={onTaSelect}
-            onClick={onTaSelect}
-            onKeyUp={onTaSelect}
-            onScroll={onTaScroll}
-            spellCheck={false}
-            style={{ ...taShared, position: "relative", background: "transparent", color: "transparent", caretColor: C.gold, resize: "vertical", outline: "none", maxHeight: 260, overflowY: "auto" }}
-          />
-        </div>
-        {interim && <div style={{ fontSize: 12, color: C.textDim, fontStyle: "italic", marginTop: 4 }}>認識中… {interim}</div>}
-        {matchedList.length > 0 && (
-          <div style={{ fontSize: 11, color: C.textMute, marginTop: 5 }}>
-            <span style={{ color: C.gold }}>●</span> 辞書一致: {matchedList.slice(0, 8).join("・")}{matchedList.length > 8 ? " 他" : ""}
+      {/* テキストエリア（メイン・大きく） */}
+      <div style={{ flex: 1, display: "flex", flexDirection: "column", padding: "12px 14px 8px", minHeight: 0 }}>
+        <textarea
+          ref={taRef}
+          value={transcript}
+          onChange={e => setTranscript(e.target.value)}
+          placeholder={listening ? "話してください…" : "マイクで話すか、直接入力してください\n\n現場が終わったら声でメモを残してください"}
+          style={{
+            flex: 1,
+            width: "100%", boxSizing: "border-box",
+            background: C.surface,
+            border: "1px solid " + (listening ? C.gold : C.border2),
+            borderRadius: 10, color: C.text,
+            padding: "14px 14px",
+            fontSize: 15, lineHeight: 1.8,
+            resize: "none", outline: "none",
+            fontFamily: "inherit", caretColor: C.gold,
+            boxShadow: listening ? "0 0 0 2px " + C.goldSoft : "none",
+          }}
+        />
+        {interim && (
+          <div style={{ fontSize: 12, color: C.textDim, fontStyle: "italic", marginTop: 5, paddingLeft: 2 }}>
+            認識中… {interim}
           </div>
         )}
+      </div>
 
-        {/* マイク */}
-        <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 6, margin: "16px 0" }}>
+      {/* マイク＋ボタン */}
+      <div style={{ flexShrink: 0, padding: "0 14px 10px" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
           <button onClick={toggleMic} aria-label={listening ? "録音停止" : "録音開始"}
-            style={{ width: 62, height: 62, borderRadius: "50%", border: "none", cursor: "pointer", fontSize: 26,
-              background: listening ? C.danger : C.gold, color: listening ? "#fff" : "#0f1117",
-              boxShadow: listening ? "0 0 14px " + C.danger : "0 0 10px rgba(240,165,0,0.35)" }}>
+            style={{ width: 54, height: 54, borderRadius: "50%", border: "none", cursor: "pointer", fontSize: 24, flexShrink: 0,
+              background: listening ? C.danger : C.gold,
+              color: listening ? "#fff" : "#0f1117",
+              boxShadow: listening ? "0 0 14px " + C.danger : "0 0 8px rgba(240,165,0,0.3)" }}>
             {listening ? "■" : "🎙"}
           </button>
-          <span style={{ fontSize: 11, color: C.textMute }}>タップで録音開始／停止</span>
+          <div style={{ display: "flex", gap: 8, flex: 1 }}>
+            <button onClick={() => { setTranscript(""); setInterim(""); }} style={{ ...S.btn(false), flex: 1 }}>クリア</button>
+            <button
+              onClick={() => transcript.trim() && setConfirming(true)}
+              disabled={!transcript.trim()}
+              style={{ ...S.btn(!!transcript.trim()), flex: 2 }}>
+              確認・保存
+            </button>
+          </div>
         </div>
-
-        {/* 操作 */}
-        <div style={{ display: "flex", gap: 8, marginBottom: 14 }}>
-          <button onClick={() => copyText(transcript)} style={btn()}>{copied ? "✓ コピー済" : "コピー"}</button>
-          <button onClick={() => { setTranscript(""); setInterim(""); caretRef.current = null; }} style={btn()}>クリア</button>
-          <button onClick={() => setShowAdd(v => !v)} style={btn(showAdd)}>＋ 用語追加</button>
-        </div>
-
-        {/* 用語追加フォーム */}
-        {showAdd && (
-          <div style={{ background: C.surface2, border: "1px solid " + C.border, borderRadius: 8, padding: 10, marginBottom: 14 }}>
-            <input value={newTerm} onChange={e => setNewTerm(e.target.value)} placeholder="新しい専門用語"
-              style={{ width: "100%", boxSizing: "border-box", background: C.surface, border: "1px solid " + C.border2, borderRadius: 6, color: C.text, padding: "8px 10px", fontSize: 13, marginBottom: 8, outline: "none" }} />
-            <div style={{ display: "flex", gap: 8 }}>
-              <select value={newCat} onChange={e => setNewCat(e.target.value)}
-                style={{ flex: 1, background: C.surface, border: "1px solid " + C.border2, borderRadius: 6, color: C.text, padding: "8px", fontSize: 12 }}>
-                {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
-              </select>
-              <button onClick={addTerm} style={{ ...btn(true), flex: "0 0 auto", padding: "8px 16px" }}>登録</button>
-            </div>
-            <div style={{ fontSize: 10, color: C.textDim, marginTop: 6 }}>追加した用語は端末に保存され、認識・ハイライトに反映されます</div>
-          </div>
-        )}
-
-        {/* 辞書 */}
-        <div style={{ borderTop: "1px solid " + C.border, paddingTop: 12 }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 6, border: "1px solid " + C.border2, borderRadius: 8, padding: "7px 10px", marginBottom: 10 }}>
-            <span style={{ color: C.textDim, fontSize: 14 }}>🔍</span>
-            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="用語を検索…"
-              style={{ flex: 1, background: "transparent", border: "none", color: C.text, fontSize: 13, outline: "none" }} />
-            {search && <span onClick={() => setSearch("")} style={{ color: C.textDim, cursor: "pointer", fontSize: 14 }}>✕</span>}
-          </div>
-
-          {!search && (
-            <div style={{ display: "flex", gap: 6, overflowX: "auto", paddingBottom: 6, marginBottom: 10 }}>
-              {catList.map(c => (
-                <span key={c} onClick={() => setActiveCat(c)}
-                  style={{ fontSize: 11, padding: "5px 11px", borderRadius: 20, cursor: "pointer", flex: "0 0 auto", whiteSpace: "nowrap",
-                    background: activeCat === c ? C.gold : C.surface, color: activeCat === c ? "#0f1117" : C.textMute,
-                    fontWeight: activeCat === c ? 700 : 400, border: "1px solid " + (activeCat === c ? C.gold : C.border) }}>
-                  {c}
-                </span>
-              ))}
-            </div>
-          )}
-
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 6, maxHeight: 200, overflowY: "auto" }}>
-            {shownTerms.map((o, i) => (
-              <span key={i} onClick={() => insertTerm(o.t)}
-                style={{ fontSize: 12, padding: "6px 11px", border: "1px solid " + C.border2, borderRadius: 8, color: C.text, cursor: "pointer", background: C.surface2 }}>
-                {search && <span style={{ fontSize: 9, color: C.textDim, marginRight: 4 }}>[{o.c}]</span>}{o.t}
-              </span>
-            ))}
-            {shownTerms.length === 0 && <span style={{ fontSize: 12, color: C.textDim }}>該当なし</span>}
-          </div>
-          <div style={{ fontSize: 11, color: C.textDim, marginTop: 7 }}>タップでカーソル位置に挿入</div>
-        </div>
-
-        {/* 保存 */}
-        {!confirming ? (
-          <button onClick={() => transcript.trim() && setConfirming(true)} disabled={!transcript.trim()}
-            style={{ width: "100%", marginTop: 16, padding: "12px 0", fontSize: 14, fontWeight: 700, border: "none", borderRadius: 8,
-              cursor: transcript.trim() ? "pointer" : "not-allowed",
-              background: transcript.trim() ? C.gold : C.border, color: transcript.trim() ? "#0f1117" : C.textDim }}>
-            記録を保存
-          </button>
-        ) : (
-          <div style={{ marginTop: 16, background: C.surface2, border: "1px solid " + C.gold, borderRadius: 8, padding: 12 }}>
-            <div style={{ fontSize: 12, color: C.textMute, marginBottom: 8 }}>この内容で保存しますか？</div>
-            <div style={{ fontSize: 13, color: C.text, lineHeight: 1.6, maxHeight: 100, overflowY: "auto", marginBottom: 10 }}>{transcript}</div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button onClick={doSave} style={{ ...btn(true), flex: 1 }}>OK・保存</button>
-              <button onClick={() => setConfirming(false)} style={{ ...btn(), flex: 1 }}>戻る</button>
-            </div>
-          </div>
-        )}
-
-        {/* 保存済み記録 */}
-        <div style={{ borderTop: "1px solid " + C.border, marginTop: 22, paddingTop: 14 }}>
-          <div style={{ fontSize: 12, color: C.textMute, marginBottom: 10, display: "flex", justifyContent: "space-between" }}>
-            <span>保存済みの記録（{memos.length}）</span>
-            {!storageOk && <span style={{ color: C.danger, fontSize: 10 }}>※この環境では保存が一時的です</span>}
-          </div>
-          {memos.length === 0 && <div style={{ fontSize: 12, color: C.textDim }}>まだ記録はありません</div>}
-          {memos.map(m => (
-            <div key={m.id} style={{ background: C.surface2, border: "1px solid " + C.border, borderRadius: 8, padding: "10px 12px", marginBottom: 8 }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                <span style={{ fontSize: 11, color: C.gold }}>{fmt(m.ts)}</span>
-                <span style={{ display: "flex", gap: 10 }}>
-                  <span onClick={() => copyText(m.text)} style={{ fontSize: 11, color: C.textMute, cursor: "pointer" }}>コピー</span>
-                  {deletingId === m.id
-                    ? <span><span onClick={() => delMemo(m.id)} style={{ fontSize: 11, color: C.danger, cursor: "pointer" }}>削除</span> <span onClick={() => setDeletingId(null)} style={{ fontSize: 11, color: C.textDim, cursor: "pointer" }}>取消</span></span>
-                    : <span onClick={() => setDeletingId(m.id)} style={{ fontSize: 11, color: C.textDim, cursor: "pointer" }}>×</span>}
-                </span>
-              </div>
-              <div style={{ fontSize: 13, color: C.text, lineHeight: 1.6, whiteSpace: "pre-wrap" }}>{m.text}</div>
-            </div>
-          ))}
-        </div>
-
-        <div style={{ height: 30 }} />
       </div>
+
+      <BottomTab tab={tab} setTab={setTab} C={C} />
     </div>
   );
+}
 
-  function btn(active) {
-    return { flex: 1, fontSize: 12, padding: "9px 0", borderRadius: 8, cursor: "pointer",
-      background: active ? C.gold : "transparent", color: active ? "#0f1117" : C.textMute,
-      border: "1px solid " + (active ? C.gold : C.border2), fontWeight: active ? 700 : 400 };
-  }
+function BottomTab({ tab, setTab, C }) {
+  return (
+    <div style={{ flexShrink: 0, display: "flex", borderTop: "1px solid " + C.border, background: C.surface, paddingBottom: "env(safe-area-inset-bottom, 8px)" }}>
+      {[["memo","🎙","メモ入力"],["history","📋","記録一覧"]].map(([key, icon, label]) => (
+        <button key={key} onClick={() => setTab(key)}
+          style={{ flex: 1, padding: "10px 0 8px", border: "none", background: "none", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 3 }}>
+          <span style={{ fontSize: 20 }}>{icon}</span>
+          <span style={{ fontSize: 10, color: tab === key ? C.gold : C.textDim, fontWeight: tab === key ? 700 : 400 }}>{label}</span>
+        </button>
+      ))}
+    </div>
+  );
 }
